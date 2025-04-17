@@ -1,0 +1,28 @@
+WITH first_purchases AS (
+    SELECT 
+        customer_id,
+        DATE_TRUNC('month', MIN(purchase_date)) AS cohort_month
+    FROM purchases
+    GROUP BY customer_id
+),
+
+monthly_activity AS (
+    SELECT 
+        fp.cohort_month,
+        DATE_TRUNC('month', p.purchase_date) AS activity_month,
+        COUNT(DISTINCT p.customer_id) AS active_customers,
+        COUNT(DISTINCT fp.customer_id) AS cohort_size
+    FROM purchases p
+    JOIN first_purchases fp ON p.customer_id = fp.customer_id
+    GROUP BY fp.cohort_month, DATE_TRUNC('month', p.purchase_date)
+)
+
+SELECT
+    cohort_month,
+    activity_month,
+    EXTRACT(MONTH FROM AGE(activity_month, cohort_month)) AS month_number,
+    active_customers,
+    cohort_size,
+    ROUND(active_customers * 100.0 / cohort_size, 2) AS retention_rate
+FROM monthly_activity
+ORDER BY cohort_month, activity_month;
