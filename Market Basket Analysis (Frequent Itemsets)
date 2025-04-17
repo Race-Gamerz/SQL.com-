@@ -1,0 +1,44 @@
+WITH order_items AS (
+    SELECT 
+        order_id,
+        product_id,
+        product_name
+    FROM order_details
+    JOIN products USING (product_id)
+),
+
+item_pairs AS (
+    SELECT 
+        a.product_id AS product1,
+        b.product_id AS product2,
+        a.product_name AS product1_name,
+        b.product_name AS product2_name,
+        COUNT(DISTINCT a.order_id) AS pair_count
+    FROM order_items a
+    JOIN order_items b ON a.order_id = b.order_id AND a.product_id < b.product_id
+    GROUP BY a.product_id, b.product_id, a.product_name, b.product_name
+),
+
+product_counts AS (
+    SELECT 
+        product_id,
+        COUNT(DISTINCT order_id) AS product_count
+    FROM order_items
+    GROUP BY product_id
+)
+
+SELECT
+    p.product1,
+    p.product2,
+    p.product1_name,
+    p.product2_name,
+    p.pair_count,
+    c1.product_count AS product1_count,
+    c2.product_count AS product2_count,
+    ROUND(p.pair_count * 100.0 / LEAST(c1.product_count, c2.product_count), 2) AS affinity_score
+FROM item_pairs p
+JOIN product_counts c1 ON p.product1 = c1.product_id
+JOIN product_counts c2 ON p.product2 = c2.product_id
+WHERE p.pair_count >= 5  -- Minimum threshold
+ORDER BY affinity_score DESC
+LIMIT 100;
