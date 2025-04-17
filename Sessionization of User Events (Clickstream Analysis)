@@ -1,0 +1,30 @@
+WITH ranked_events AS (
+    SELECT
+        user_id,
+        event_time,
+        LAG(event_time) OVER (PARTITION BY user_id ORDER BY event_time) AS prev_event_time
+    FROM user_events
+),
+
+sessionized AS (
+    SELECT
+        user_id,
+        event_time,
+        SUM(CASE 
+            WHEN prev_event_time IS NULL 
+            OR EXTRACT(EPOCH FROM (event_time - prev_event_time)) > 1800 -- 30 min inactivity
+            THEN 1 ELSE 0 
+        END) OVER (PARTITION BY user_id ORDER BY event_time) AS session_id
+    FROM ranked_events
+)
+
+SELECT
+    user_id,
+    session_id,
+    MIN(event_time) AS session_start,
+    MAX(event_time) AS session_end,
+    COUNT(*) AS events_count,
+    EXTRACT(EPOCH FROM (MAX(event_time) - MIN(event_time))) AS session_duration_sec
+FROM sessionized
+GROUP BY user_id, session_id
+ORDER BY user_id, session_start;
