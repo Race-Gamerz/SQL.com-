@@ -1,0 +1,21 @@
+WITH RECURSIVE employee_hierarchy AS (
+    -- Base case: CEO (no manager)
+    SELECT id, name, title, manager_id, 1 AS level
+    FROM employees
+    WHERE manager_id IS NULL
+    
+    UNION ALL
+    
+    -- Recursive case: all other employees
+    SELECT e.id, e.name, e.title, e.manager_id, eh.level + 1
+    FROM employees e
+    JOIN employee_hierarchy eh ON e.manager_id = eh.id
+)
+SELECT 
+    id, 
+    name, 
+    title, 
+    LPAD(' ', (level-1)*4, ' ') || name AS org_chart,
+    level
+FROM employee_hierarchy
+ORDER BY level, name;
