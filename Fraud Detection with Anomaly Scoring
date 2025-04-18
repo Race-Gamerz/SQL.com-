@@ -1,0 +1,46 @@
+WITH transaction_stats AS (
+    SELECT
+        AVG(amount) AS global_avg,
+        STDDEV(amount) AS global_stddev,
+        PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY amount) AS p99_amount
+    FROM transactions
+    WHERE transaction_date >= CURRENT_DATE - INTERVAL '90 days'
+),
+
+customer_baseline AS (
+    SELECT
+        customer_id,
+        AVG(amount) AS cust_avg,
+        STDDEV(amount) AS cust_stddev,
+        COUNT(*) AS transaction_count
+    FROM transactions
+    WHERE transaction_date >= CURRENT_DATE - INTERVAL '90 days'
+    GROUP BY customer_id
+    HAVING COUNT(*) >= 5
+)
+
+SELECT
+    t.transaction_id,
+    t.customer_id,
+    t.amount,
+    t.transaction_date,
+    CASE
+        WHEN t.amount > s.p99_amount THEN 'High Value'
+        WHEN t.amount > (b.cust_avg + 3*b.cust_stddev) THEN 'Customer Anomaly'
+        WHEN t.amount > (s.global_avg + 3*s.global_stddev) THEN 'Global Anomaly'
+        ELSE 'Normal'
+    END AS anomaly_type,
+    CASE
+        WHEN t.amount > s.p99_amount THEN 1.0
+        WHEN t.amount > (b.cust_avg + 3*b.cust_stddev) THEN 
+            (t.amount - b.cust_avg) / NULLIF(b.cust_stddev, 0)
+        WHEN t.amount > (s.global_avg + 3*s.global_stddev) THEN 
+            (t.amount - s.global_avg) / NULLIF(s.global_stddev, 0)
+        ELSE 0
+    END AS anomaly_score
+FROM transactions t
+JOIN transaction_stats s ON 1=1
+LEFT JOIN customer_baseline b ON t.customer_id = b.customer_id
+WHERE t.transaction_date >= CURRENT_DATE - INTERVAL '7 days'
+ORDER BY anomaly_score DESC
+LIMIT 100;
