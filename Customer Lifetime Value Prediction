@@ -1,0 +1,35 @@
+WITH customer_metrics AS (
+    SELECT
+        customer_id,
+        COUNT(DISTINCT order_id) AS order_count,
+        SUM(order_amount) AS total_revenue,
+        MIN(order_date) AS first_order_date,
+        MAX(order_date) AS last_order_date,
+        EXTRACT(DAY FROM (MAX(order_date) - MIN(order_date))) AS customer_days
+    FROM orders
+    WHERE order_date >= CURRENT_DATE - INTERVAL '2 years'
+    GROUP BY customer_id
+),
+
+clv_calculation AS (
+    SELECT
+        customer_id,
+        order_count,
+        total_revenue,
+        customer_days,
+        total_revenue / NULLIF(customer_days, 0) * 365 * 3 AS predicted_3yr_clv,
+        NTILE(5) OVER (ORDER BY total_revenue / NULLIF(customer_days, 0) * 365 * 3) AS clv_quintile
+    FROM customer_metrics
+    WHERE customer_days > 30  -- Only established customers
+)
+
+SELECT
+    clv_quintile,
+    COUNT(*) AS customers,
+    AVG(total_revenue) AS avg_revenue,
+    AVG(order_count) AS avg_orders,
+    AVG(predicted_3yr_clv) AS avg_predicted_clv,
+    SUM(predicted_3yr_clv) AS total_predicted_clv
+FROM clv_calculation
+GROUP BY clv_quintile
+ORDER BY clv_quintile;
