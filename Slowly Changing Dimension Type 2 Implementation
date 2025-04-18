@@ -1,0 +1,66 @@
+-- Initial load
+INSERT INTO scd_customers (
+    customer_id,
+    name,
+    email,
+    tier,
+    start_date,
+    end_date,
+    is_current
+)
+SELECT 
+    customer_id,
+    name,
+    email,
+    tier,
+    CURRENT_DATE AS start_date,
+    '9999-12-31'::DATE AS end_date,
+    TRUE AS is_current
+FROM source_customers;
+
+-- Update with SCD Type 2
+WITH changed_records AS (
+    SELECT 
+        s.customer_id,
+        s.name,
+        s.email,
+        s.tier
+    FROM source_customers s
+    JOIN scd_customers sc ON s.customer_id = sc.customer_id
+    WHERE sc.is_current = TRUE
+    AND (
+        sc.name <> s.name OR
+        sc.email <> s.email OR
+        sc.tier <> s.tier
+    )
+),
+
+expire_old_records AS (
+    UPDATE scd_customers sc
+    SET 
+        end_date = CURRENT_DATE - INTERVAL '1 day',
+        is_current = FALSE
+    FROM changed_records c
+    WHERE sc.customer_id = c.customer_id
+    AND sc.is_current = TRUE
+    RETURNING sc.customer_id
+)
+
+INSERT INTO scd_customers (
+    customer_id,
+    name,
+    email,
+    tier,
+    start_date,
+    end_date,
+    is_current
+)
+SELECT 
+    c.customer_id,
+    c.name,
+    c.email,
+    c.tier,
+    CURRENT_DATE AS start_date,
+    '9999-12-31'::DATE AS end_date,
+    TRUE AS is_current
+FROM changed_records c;
