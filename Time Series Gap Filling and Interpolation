@@ -1,0 +1,55 @@
+WITH time_series AS (
+    SELECT 
+        generate_series(
+            DATE_TRUNC('hour', MIN(observation_time)),
+            DATE_TRUNC('hour', MAX(observation_time)),
+            INTERVAL '1 hour'
+        ) AS hour
+    FROM sensor_readings
+),
+
+hourly_aggregates AS (
+    SELECT
+        DATE_TRUNC('hour', observation_time) AS hour,
+        AVG(temperature) AS avg_temp,
+        COUNT(*) AS readings_count
+    FROM sensor_readings
+    GROUP BY DATE_TRUNC('hour', observation_time)
+),
+
+filled_series AS (
+    SELECT
+        ts.hour,
+        ha.avg_temp,
+        ha.readings_count,
+        LAST_VALUE(ha.avg_temp) IGNORE NULLS OVER (
+            ORDER BY ts.hour
+            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS last_known_temp,
+        FIRST_VALUE(ha.avg_temp) IGNORE NULLS OVER (
+            ORDER BY ts.hour
+            ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+        ) AS next_known_temp
+    FROM time_series ts
+    LEFT JOIN hourly_aggregates ha ON ts.hour = ha.hour
+)
+
+SELECT
+    hour,
+    CASE
+        WHEN avg_temp IS NOT NULL THEN avg_temp
+        WHEN last_known_temp IS NOT NULL AND next_known_temp IS NOT NULL THEN
+            last_known_temp + 
+            (EXTRACT(EPOCH FROM (hour - MIN(hour) OVER (partition_window))) / 
+             EXTRACT(EPOCH FROM (MAX(hour) OVER (partition_window) - MIN(hour) OVER (partition_window)))) *
+            (next_known_temp - last_known_temp)
+        ELSE last_known_temp
+    END AS interpolated_temp,
+    readings_count
+FROM filled_series
+WINDOW partition_window AS (
+    PARTITION BY CASE WHEN avg_temp IS NULL THEN 0 ELSE 1 END
+    ORDER BY hour
+    ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+)
+ORDER BY hour;
