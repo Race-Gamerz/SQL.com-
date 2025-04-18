@@ -1,0 +1,64 @@
+WITH source_stats AS (
+    SELECT
+        'customers' AS table_name,
+        COUNT(*) AS row_count,
+        SUM(LENGTH(COALESCE(name, '')) + LENGTH(COALESCE(email, ''))) AS data_volume,
+        COUNT(DISTINCT customer_id) AS distinct_ids,
+        MIN(created_at) AS min_date,
+        MAX(created_at) AS max_date
+    FROM source_system.customers
+    
+    UNION ALL
+    
+    SELECT
+        'orders' AS table_name,
+        COUNT(*) AS row_count,
+        SUM(LENGTH(COALESCE(order_number, '')) + SUM(amount) AS data_volume,
+        COUNT(DISTINCT order_id) AS distinct_ids,
+        MIN(order_date) AS min_date,
+        MAX(order_date) AS max_date
+    FROM source_system.orders
+),
+
+target_stats AS (
+    SELECT
+        'customers' AS table_name,
+        COUNT(*) AS row_count,
+        SUM(LENGTH(COALESCE(name, '')) + SUM(LENGTH(COALESCE(email, ''))) AS data_volume,
+        COUNT(DISTINCT customer_id) AS distinct_ids,
+        MIN(created_at) AS min_date,
+        MAX(created_at) AS max_date
+    FROM target_system.customers
+    
+    UNION ALL
+    
+    SELECT
+        'orders' AS table_name,
+        COUNT(*) AS row_count,
+        SUM(LENGTH(COALESCE(order_number, ''))) + SUM(amount) AS data_volume,
+        COUNT(DISTINCT order_id) AS distinct_ids,
+        MIN(order_date) AS min_date,
+        MAX(order_date) AS max_date
+    FROM target_system.orders
+)
+
+SELECT
+    s.table_name,
+    s.row_count AS source_rows,
+    t.row_count AS target_rows,
+    CASE 
+        WHEN s.row_count = t.row_count THEN '✅' 
+        ELSE '❌ Diff: ' || (s.row_count - t.row_count)
+    END AS row_validation,
+    s.data_volume AS source_data,
+    t.data_volume AS target_data,
+    ROUND((1.0 - ABS(s.data_volume - t.data_volume) / NULLIF(s.data_volume, 0)) * 100, 2) AS data_similarity_pct,
+    s.distinct_ids AS source_distinct_ids,
+    t.distinct_ids AS target_distinct_ids,
+    s.min_date AS source_min_date,
+    t.min_date AS target_min_date,
+    s.max_date AS source_max_date,
+    t.max_date AS target_max_date
+FROM source_stats s
+JOIN target_stats t ON s.table_name = t.table_name
+ORDER BY s.table_name;
