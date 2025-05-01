@@ -1,0 +1,50 @@
+-- Analyze customer retention by cohort with complex metrics
+WITH customer_cohorts AS (
+    SELECT
+        customer_id,
+        DATE_TRUNC('month', MIN(order_date)) AS cohort_month,
+        DATE_TRUNC('month', order_date) AS order_month,
+        COUNT(DISTINCT order_id) AS orders_count,
+        SUM(order_amount) AS total_spend
+    FROM orders
+    GROUP BY customer_id, DATE_TRUNC('month', order_date)
+),
+cohort_sizes AS (
+    SELECT
+        cohort_month,
+        COUNT(DISTINCT customer_id) AS cohort_size
+    FROM customer_cohorts
+    WHERE order_month = cohort_month
+    GROUP BY cohort_month
+),
+retention_data AS (
+    SELECT
+        cc.cohort_month,
+        cc.order_month,
+        EXTRACT(MONTH FROM AGE(cc.order_month, cc.cohort_month)) AS month_number,
+        cs.cohort_size,
+        COUNT(DISTINCT cc.customer_id) AS retained_customers,
+        SUM(cc.total_spend) AS cohort_revenue,
+        SUM(cc.orders_count) AS cohort_orders,
+        -- Customer quality metrics
+        SUM(cc.total_spend) / NULLIF(COUNT(DISTINCT cc.customer_id), 0) AS avg_spend_per_customer,
+        SUM(cc.orders_count) / NULLIF(COUNT(DISTINCT cc.customer_id), 0) AS avg_orders_per_customer
+    FROM customer_cohorts cc
+    JOIN cohort_sizes cs ON cc.cohort_month = cs.cohort_month
+    GROUP BY cc.cohort_month, cc.order_month, cs.cohort_size
+)
+SELECT
+    TO_CHAR(cohort_month, 'YYYY-MM') AS cohort,
+    TO_CHAR(order_month, 'YYYY-MM') AS order_month,
+    month_number,
+    cohort_size,
+    retained_customers,
+    ROUND((retained_customers::FLOAT / cohort_size) * 100, 2) AS retention_rate,
+    cohort_revenue,
+    ROUND((cohort_revenue / NULLIF(cohort_size, 0))::NUMERIC, 2) AS avg_revenue_per_customer,
+    -- Rolling metrics
+    ROUND(AVG(retention_rate) OVER (PARTITION BY cohort_month ORDER BY month_number ROWS BETWEEN 2 PRECEDING AND CURRENT ROW), 2) AS rolling_avg_retention,
+    -- Comparison to previous cohort
+    retention_rate - LAG(retention_rate) OVER (PARTITION BY month_number ORDER BY cohort_month) AS retention_rate_delta
+FROM retention_data
+ORDER BY cohort_month, month_number;
