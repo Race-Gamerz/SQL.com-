@@ -1,0 +1,91 @@
+-- Detect anomalous transactions using statistical methods
+WITH transaction_stats AS (
+    SELECT
+        customer_id,
+        COUNT(*) AS transaction_count,
+        AVG(amount) AS avg_amount,
+        STDDEV(amount) AS stddev_amount,
+        MAX(amount) AS max_amount,
+        MIN(amount) AS min_amount,
+        COUNT(DISTINCT merchant_id) AS unique_merchants,
+        COUNT(DISTINCT country) AS unique_countries
+    FROM transactions
+    WHERE transaction_date > CURRENT_DATE - INTERVAL '90 days'
+    GROUP BY customer_id
+),
+current_transactions AS (
+    SELECT
+        t.*,
+        ts.avg_amount,
+        ts.stddev_amount,
+        -- Z-score calculation
+        CASE
+            WHEN ts.stddev_amount > 0 THEN (t.amount - ts.avg_amount) / ts.stddev_amount
+            ELSE 0
+        END AS amount_zscore,
+        -- Time since last transaction
+        EXTRACT(EPOCH FROM (t.transaction_date - LAG(t.transaction_date) 
+            OVER (PARTITION BY t.customer_id ORDER BY t.transaction_date))) / 3600 AS hours_since_last_txn,
+        -- Velocity check
+        COUNT(*) OVER (PARTITION BY t.customer_id 
+            ORDER BY t.transaction_date 
+            RANGE BETWEEN INTERVAL '1 hour' PRECEDING AND CURRENT ROW) AS txns_last_hour
+    FROM transactions t
+    JOIN transaction_stats ts ON t.customer_id = ts.customer_id
+    WHERE t.transaction_date > CURRENT_DATE - INTERVAL '7 days'
+),
+fraud_scoring AS (
+    SELECT
+        ct.*,
+        -- Composite fraud score (0-100)
+        LEAST(100, GREATEST(0,
+            -- Amount anomaly (40% weight)
+            (CASE 
+                WHEN amount_zscore > 3 THEN 40 
+                WHEN amount_zscore > 2 THEN 25 
+                WHEN amount_zscore > 1 THEN 10 
+                ELSE 0 
+            END) +
+            -- Time anomaly (30% weight)
+            (CASE
+                WHEN hours_since_last_txn < 0.1 THEN 30  -- Multiple transactions in <6 minutes
+                WHEN hours_since_last_txn IS NULL THEN 0 -- First transaction
+                WHEN hours_since_last_txn < 1 THEN 15    -- Multiple transactions in <1 hour
+                ELSE 0
+            END) +
+            -- Velocity anomaly (20% weight)
+            (CASE
+                WHEN txns_last_hour > 10 THEN 20
+                WHEN txns_last_hour > 5 THEN 10
+                ELSE 0
+            END) +
+            -- Geographic anomaly (10% weight)
+            (CASE
+                WHEN unique_countries > 3 AND unique_countries > ts.unique_countries * 2 THEN 10
+                ELSE 0
+            END)
+        )) AS fraud_score
+    FROM current_transactions ct
+    JOIN transaction_stats ts ON ct.customer_id = ts.customer_id
+)
+SELECT
+    transaction_id,
+    customer_id,
+    amount,
+    TO_CHAR(transaction_date, 'YYYY-MM-DD HH24:MI:SS') AS transaction_time,
+    ROUND(amount_zscore, 2) AS z_score,
+    fraud_score,
+    CASE
+        WHEN fraud_score > 70 THEN 'CRITICAL'
+        WHEN fraud_score > 50 THEN 'HIGH'
+        WHEN fraud_score > 30 THEN 'MEDIUM'
+        WHEN fraud_score > 15 THEN 'LOW'
+        ELSE 'NORMAL'
+    END AS risk_level,
+    -- Additional context for investigators
+    hours_since_last_txn,
+    txns_last_hour
+FROM fraud_scoring
+WHERE fraud_score > 30  -- Only show potentially risky transactions
+ORDER BY fraud_score DESC, transaction_date DESC
+LIMIT 100;
