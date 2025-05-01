@@ -1,0 +1,114 @@
+-- Advanced shard rebalancing algorithm for distributed databases
+WITH shard_metrics AS (
+    SELECT
+        shard_id,
+        node_id,
+        -- Storage metrics
+        pg_size_pretty(total_size) AS total_size,
+        total_size,
+        -- Performance metrics
+        query_count,
+        query_count / NULLIF(EXTRACT(EPOCH FROM (NOW() - metrics_since)), 0) AS queries_per_second,
+        -- Resource utilization
+        cpu_usage_percent,
+        memory_usage_percent,
+        -- Composite load score (0-100)
+        (
+            (LEAST(100, GREATEST(0, (total_size - avg_size) / NULLIF(stddev_size, 0) * 10 + 50)) * 0.4 +
+            (LEAST(100, GREATEST(0, (query_count - avg_queries) / NULLIF(stddev_queries, 0) * 10 + 50)) * 0.3 +
+            (LEAST(100, cpu_usage_percent)) * 0.2 +
+            (LEAST(100, memory_usage_percent)) * 0.1
+        ) AS load_score
+    FROM (
+        SELECT
+            s.shard_id,
+            s.node_id,
+            s.total_size,
+            s.query_count,
+            s.cpu_usage_percent,
+            s.memory_usage_percent,
+            s.metrics_since,
+            AVG(s.total_size) OVER () AS avg_size,
+            STDDEV(s.total_size) OVER () AS stddev_size,
+            AVG(s.query_count) OVER () AS avg_queries,
+            STDDEV(s.query_count) OVER () AS stddev_queries
+        FROM shard_metrics s
+        WHERE metrics_time > NOW() - INTERVAL '1 hour'
+    ) t
+),
+node_capacity AS (
+    SELECT
+        node_id,
+        SUM(total_size) AS total_node_size,
+        SUM(query_count) AS total_node_queries,
+        AVG(cpu_usage_percent) AS avg_node_cpu,
+        AVG(memory_usage_percent) AS avg_node_memory,
+        COUNT(shard_id) AS shard_count,
+        -- Node capacity score (lower is better)
+        (
+            (LEAST(100, GREATEST(0, (SUM(total_size) - AVG(avg_size)) / NULLIF(STDDEV(total_size), 0) * 10 + 50)) * 0.4 +
+            (LEAST(100, GREATEST(0, (SUM(query_count) - AVG(avg_queries)) / NULLIF(STDDEV(query_count), 0) * 10 + 50)) * 0.3 +
+            (LEAST(100, AVG(cpu_usage_percent))) * 0.2 +
+            (LEAST(100, AVG(memory_usage_percent))) * 0.1
+        ) AS node_score
+    FROM shard_metrics
+    CROSS JOIN (SELECT AVG(total_size) AS avg_size, AVG(query_count) AS avg_queries FROM shard_metrics) avg_values
+    GROUP BY node_id
+),
+rebalance_candidates AS (
+    SELECT
+        sm.shard_id,
+        sm.node_id AS current_node,
+        sm.load_score AS current_load,
+        nc.node_score AS current_node_score,
+        -- Find best candidate node
+        (
+            SELECT n.node_id
+            FROM node_capacity n
+            WHERE n.node_id != sm.node_id
+            ORDER BY n.node_score ASC
+            LIMIT 1
+        ) AS target_node,
+        (
+            SELECT n.node_score
+            FROM node_capacity n
+            WHERE n.node_id != sm.node_id
+            ORDER BY n.node_score ASC
+            LIMIT 1
+        ) AS target_node_score,
+        -- Calculate expected improvement
+        sm.load_score - (
+            SELECT AVG(sm2.load_score)
+            FROM shard_metrics sm2
+            WHERE sm2.node_id = (
+                SELECT n.node_id
+                FROM node_capacity n
+                WHERE n.node_id != sm.node_id
+                ORDER BY n.node_score ASC
+                LIMIT 1
+            )
+        ) AS expected_improvement
+    FROM shard_metrics sm
+    JOIN node_capacity nc ON sm.node_id = nc.node_id
+    WHERE sm.load_score > 70  -- Only overloaded shards
+    ORDER BY sm.load_score DESC
+)
+SELECT
+    shard_id,
+    current_node,
+    ROUND(current_load, 2) AS current_load_score,
+    ROUND(current_node_score, 2) AS current_node_score,
+    target_node,
+    ROUND(target_node_score, 2) AS target_node_score,
+    ROUND(expected_improvement, 2) AS expected_improvement,
+    -- Generate the actual rebalance command
+    format(
+        'MOVE SHARD %s FROM NODE %s TO NODE %s; -- Expected load improvement: %s',
+        shard_id,
+        current_node,
+        target_node,
+        ROUND(expected_improvement, 2)
+    ) AS rebalance_command
+FROM rebalance_candidates
+WHERE expected_improvement > 10  -- Only suggest moves with significant improvement
+ORDER BY expected_improvement DESC;
