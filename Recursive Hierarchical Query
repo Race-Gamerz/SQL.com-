@@ -1,0 +1,35 @@
+-- Find the complete management chain for an employee (CEO to employee)
+WITH RECURSIVE employee_hierarchy AS (
+    -- Base case: Start with the employee
+    SELECT 
+        id, 
+        name, 
+        manager_id, 
+        1 AS level,
+        ARRAY[id] AS path,
+        name AS hierarchy_path
+    FROM employees
+    WHERE id = 1234  -- Target employee ID
+    
+    UNION ALL
+    
+    -- Recursive case: Move up to each manager
+    SELECT 
+        e.id, 
+        e.name, 
+        e.manager_id, 
+        eh.level + 1,
+        e.id || eh.path,
+        e.name || ' > ' || eh.hierarchy_path
+    FROM employees e
+    JOIN employee_hierarchy eh ON e.id = eh.manager_id
+    -- Prevent cycles
+    WHERE NOT e.id = ANY(eh.path)
+)
+SELECT 
+    id,
+    name,
+    level AS management_level,
+    hierarchy_path
+FROM employee_hierarchy
+ORDER BY level DESC;
