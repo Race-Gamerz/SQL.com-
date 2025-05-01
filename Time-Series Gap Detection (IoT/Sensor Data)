@@ -1,0 +1,43 @@
+-- Identify gaps in time-series data and calculate missing intervals
+WITH time_boundaries AS (
+    SELECT 
+        sensor_id,
+        MIN(timestamp) AS min_time,
+        MAX(timestamp) AS max_time
+    FROM sensor_readings
+    GROUP BY sensor_id
+),
+time_series AS (
+    SELECT 
+        sr.sensor_id,
+        sr.timestamp,
+        LEAD(sr.timestamp) OVER (PARTITION BY sr.sensor_id ORDER BY sr.timestamp) AS next_timestamp
+    FROM sensor_readings sr
+),
+gaps AS (
+    SELECT
+        ts.sensor_id,
+        ts.timestamp AS gap_start,
+        ts.next_timestamp AS gap_end,
+        EXTRACT(EPOCH FROM (ts.next_timestamp - ts.timestamp)) AS gap_seconds,
+        tb.min_time,
+        tb.max_time
+    FROM time_series ts
+    JOIN time_boundaries tb ON ts.sensor_id = tb.sensor_id
+    WHERE ts.next_timestamp - ts.timestamp > INTERVAL '5 minutes'  -- Threshold for gap
+)
+SELECT
+    sensor_id,
+    gap_start,
+    gap_end,
+    gap_seconds,
+    -- Calculate percentage of total time range
+    (gap_seconds / EXTRACT(EPOCH FROM (max_time - min_time))) * 100 AS gap_percentage,
+    -- Categorize gap severity
+    CASE
+        WHEN gap_seconds < 3600 THEN 'Minor'
+        WHEN gap_seconds < 86400 THEN 'Significant'
+        ELSE 'Critical'
+    END AS gap_severity
+FROM gaps
+ORDER BY sensor_id, gap_start;
