@@ -1,0 +1,44 @@
+-- Create a database with filegroups
+CREATE DATABASE HR_Management
+ON PRIMARY 
+(
+    NAME = 'HR_Management_Data',
+    FILENAME = 'C:\Data\HR_Management.mdf',
+    SIZE = 50MB,
+    MAXSIZE = UNLIMITED,
+    FILEGROWTH = 10%
+)
+LOG ON
+(
+    NAME = 'HR_Management_Log',
+    FILENAME = 'C:\Logs\HR_Management.ldf',
+    SIZE = 25MB,
+    MAXSIZE = 100MB,
+    FILEGROWTH = 5%
+);
+
+-- Use the database
+USE HR_Management;
+
+-- Create a table with computed column
+CREATE TABLE Employees (
+    EmployeeID INT IDENTITY(1,1) PRIMARY KEY,
+    FirstName NVARCHAR(50) NOT NULL,
+    LastName NVARCHAR(50) NOT NULL,
+    BirthDate DATE,
+    HireDate DATE NOT NULL,
+    Salary DECIMAL(10,2),
+    YearsOfService AS DATEDIFF(YEAR, HireDate, GETDATE()),
+    CONSTRAINT CHK_Salary CHECK (Salary > 0)
+);
+
+-- Create a stored procedure
+CREATE PROCEDURE GetEmployeeByHireYear
+    @Year INT
+AS
+BEGIN
+    SELECT EmployeeID, FirstName, LastName, HireDate, Salary
+    FROM Employees
+    WHERE YEAR(HireDate) = @Year
+    ORDER BY LastName, FirstName;
+END;
