@@ -1,0 +1,45 @@
+-- Create a database with specific encoding
+CREATE DATABASE library
+    WITH 
+    OWNER = postgres
+    ENCODING = 'UTF8'
+    LC_COLLATE = 'en_US.UTF-8'
+    LC_CTYPE = 'en_US.UTF-8'
+    TABLESPACE = pg_default
+    CONNECTION LIMIT = -1;
+
+-- Create a table with array type
+CREATE TABLE books (
+    book_id SERIAL PRIMARY KEY,
+    title VARCHAR(200) NOT NULL,
+    authors VARCHAR(100)[],
+    publication_date DATE,
+    genres VARCHAR(50)[],
+    price NUMERIC(6,2),
+    available BOOLEAN DEFAULT TRUE
+);
+
+-- Create a function with PL/pgSQL
+CREATE OR REPLACE FUNCTION get_books_by_genre(genre_name VARCHAR)
+RETURNS TABLE (
+    book_id INT,
+    title VARCHAR,
+    publication_year INT
+) AS $$
+BEGIN
+    RETURN QUERY
+    SELECT b.book_id, b.title, EXTRACT(YEAR FROM b.publication_date)::INT
+    FROM books b
+    WHERE genre_name = ANY(b.genres)
+    ORDER BY b.publication_date DESC;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Use window function
+SELECT 
+    title,
+    price,
+    AVG(price) OVER (PARTITION BY genres) AS avg_genre_price,
+    price - AVG(price) OVER (PARTITION BY genres) AS price_diff_from_avg
+FROM books
+WHERE available = TRUE;
