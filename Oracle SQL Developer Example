@@ -1,0 +1,77 @@
+-- Create a tablespace and user
+CREATE TABLESPACE app_data
+  DATAFILE 'app_data01.dbf'
+  SIZE 100M AUTOEXTEND ON NEXT 50M MAXSIZE UNLIMITED;
+
+CREATE USER app_user IDENTIFIED BY "Str0ngP@ssw0rd"
+  DEFAULT TABLESPACE app_data
+  TEMPORARY TABLESPACE temp
+  QUOTA UNLIMITED ON app_data;
+
+GRANT CREATE SESSION, CREATE TABLE, CREATE SEQUENCE, CREATE PROCEDURE TO app_user;
+
+-- Connect as app_user and create objects
+CREATE TABLE departments (
+    dept_id NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    dept_name VARCHAR2(100) NOT NULL,
+    location VARCHAR2(100),
+    budget NUMBER(12,2)
+) TABLESPACE app_data;
+
+CREATE TABLE employees (
+    emp_id NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    first_name VARCHAR2(50) NOT NULL,
+    last_name VARCHAR2(50) NOT NULL,
+    email VARCHAR2(100) UNIQUE,
+    hire_date DATE DEFAULT SYSDATE,
+    salary NUMBER(10,2),
+    dept_id NUMBER REFERENCES departments(dept_id),
+    CONSTRAINT salary_check CHECK (salary > 0)
+) TABLESPACE app_data;
+
+-- Create a package
+CREATE OR REPLACE PACKAGE emp_pkg AS
+    PROCEDURE hire_employee(
+        p_first_name IN VARCHAR2,
+        p_last_name IN VARCHAR2,
+        p_email IN VARCHAR2,
+        p_salary IN NUMBER,
+        p_dept_id IN NUMBER,
+        p_emp_id OUT NUMBER
+    );
+    
+    FUNCTION get_dept_budget(p_dept_id IN NUMBER) RETURN NUMBER;
+END emp_pkg;
+/
+
+CREATE OR REPLACE PACKAGE BODY emp_pkg AS
+    PROCEDURE hire_employee(
+        p_first_name IN VARCHAR2,
+        p_last_name IN VARCHAR2,
+        p_email IN VARCHAR2,
+        p_salary IN NUMBER,
+        p_dept_id IN NUMBER,
+        p_emp_id OUT NUMBER
+    ) IS
+    BEGIN
+        INSERT INTO employees (first_name, last_name, email, salary, dept_id)
+        VALUES (p_first_name, p_last_name, p_email, p_salary, p_dept_id)
+        RETURNING emp_id INTO p_emp_id;
+        
+        COMMIT;
+    END hire_employee;
+    
+    FUNCTION get_dept_budget(p_dept_id IN NUMBER) RETURN NUMBER IS
+        v_budget NUMBER;
+    BEGIN
+        SELECT budget INTO v_budget
+        FROM departments
+        WHERE dept_id = p_dept_id;
+        
+        RETURN v_budget;
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            RETURN 0;
+    END get_dept_budget;
+END emp_pkg;
+/
